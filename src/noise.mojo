@@ -1,20 +1,20 @@
 """Perlin improved noise and simplex noise kernels compatible with noise 1.2.2."""
 
-from std.algorithm import parallelize
+from max.algorithm import parallelize
+from max.gpu.host import DeviceContext
 from std.gpu import global_idx
-from std.gpu.host import DeviceContext
 from std.math import abs, floor
-from std.sys.info import simd_width_of
+from std.sys import simd_width_of
 
-comptime FPtr = UnsafePointer[Float32, AnyOrigin[mut=True]]
-comptime BPtr = UnsafePointer[UInt8, AnyOrigin[mut=True]]
+comptime FPtr = Pointer[Float32, AnyOrigin[mut=True]]
+comptime BPtr = Pointer[UInt8, AnyOrigin[mut=True]]
 comptime PARALLEL_THRESHOLD = 16384
 comptime PARALLEL_GRAIN = 4096
 comptime MAX_PARALLEL_WORKERS = 16
 
 
 def perm(p: BPtr, i: Int) -> Int:
-    return Int(p[i])
+    return Int(p.unsafe_load(i))
 
 
 def lerp(t: Float32, a: Float32, b: Float32) -> Float32:
@@ -553,23 +553,23 @@ def perlin2_range(
     octaves: Int, persistence: Float32, lacunarity: Float32,
     repeatx: Float32, repeaty: Float32, base: Int, p: BPtr,
 ):
-    comptime W = simd_width_of[DType.float64]()
+    comptime W = simd_width_of[DType.float32]()
     var vector_end = start + ((end - start) // W) * W
     for i in range(start, vector_end, W):
-        var xv = x.load[width=W](i)
-        var yv = y.load[width=W](i)
+        var xv = x.unsafe_load[width=W](i)
+        var yv = y.unsafe_load[width=W](i)
         var values = SIMD[DType.float32, W]()
         comptime for lane in range(W):
             values[lane] = perlin2_fbm(
                 xv[lane], yv[lane], octaves, persistence, lacunarity,
                 repeatx, repeaty, base, p,
             )
-        result.store(i, values)
+        result.unsafe_store(i, values)
     for i in range(vector_end, end):
-        result[i] = perlin2_fbm(
-            x[i], y[i], octaves, persistence, lacunarity,
-            repeatx, repeaty, base, p,
-        )
+        result.unsafe_store(i, perlin2_fbm(
+            x.unsafe_load(i), y.unsafe_load(i), octaves, persistence,
+            lacunarity, repeatx, repeaty, base, p,
+        ))
 
 
 def simplex4_range(
@@ -577,35 +577,37 @@ def simplex4_range(
     start: Int, end: Int, octaves: Int, persistence: Float32,
     lacunarity: Float32, p: BPtr,
 ):
-    comptime W = simd_width_of[DType.float64]()
+    comptime W = simd_width_of[DType.float32]()
     var vector_end = start + ((end - start) // W) * W
     for i in range(start, vector_end, W):
-        var xv = x.load[width=W](i)
-        var yv = y.load[width=W](i)
-        var zv = z.load[width=W](i)
-        var wv = w.load[width=W](i)
+        var xv = x.unsafe_load[width=W](i)
+        var yv = y.unsafe_load[width=W](i)
+        var zv = z.unsafe_load[width=W](i)
+        var wv = w.unsafe_load[width=W](i)
         var values = SIMD[DType.float32, W]()
         comptime for lane in range(W):
             values[lane] = simplex4_fbm(
                 xv[lane], yv[lane], zv[lane], wv[lane],
                 octaves, persistence, lacunarity, p,
             )
-        result.store(i, values)
+        result.unsafe_store(i, values)
     for i in range(vector_end, end):
-        result[i] = simplex4_fbm(
-            x[i], y[i], z[i], w[i], octaves, persistence, lacunarity, p,
-        )
+        result.unsafe_store(i, simplex4_fbm(
+            x.unsafe_load(i), y.unsafe_load(i), z.unsafe_load(i),
+            w.unsafe_load(i), octaves, persistence, lacunarity, p,
+        ))
 
 
 def simplex4_gpu(
-    x: FPtr, y: FPtr, z: FPtr, w: FPtr, result: FPtr, n: Int,
-    octaves: Int, persistence: Float32, lacunarity: Float32, p: BPtr,
+    x: FPtr, y: FPtr, z: FPtr, w: FPtr, result: FPtr, n: Int64, octaves: Int64,
+    persistence: Float32, lacunarity: Float32, p: BPtr,
 ):
     var i = global_idx.x
-    if i < n:
-        result[i] = simplex4_fbm(
-            x[i], y[i], z[i], w[i], octaves, persistence, lacunarity, p,
-        )
+    if i < Int(n):
+        result.unsafe_store(i, simplex4_fbm(
+            x.unsafe_load(i), y.unsafe_load(i), z.unsafe_load(i),
+            w.unsafe_load(i), Int(octaves), persistence, lacunarity, p,
+        ))
 
 
 @export("mn_pnoise1")
@@ -687,7 +689,9 @@ def mn_pnoise1_array(
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
     for i in range(n):
-        result[i] = perlin1_fbm(x[i], octaves, persistence, lacunarity, repeat, base, p)
+        result.unsafe_store(i, perlin1_fbm(
+            x.unsafe_load(i), octaves, persistence, lacunarity, repeat, base, p,
+        ))
 
 
 @export("mn_pnoise2_array")
@@ -736,10 +740,11 @@ def mn_pnoise3_array(
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
     for i in range(n):
-        result[i] = perlin3_fbm(
-            x[i], y[i], z[i], octaves, persistence, lacunarity,
+        result.unsafe_store(i, perlin3_fbm(
+            x.unsafe_load(i), y.unsafe_load(i), z.unsafe_load(i),
+            octaves, persistence, lacunarity,
             repeatx, repeaty, repeatz, base, p,
-        )
+        ))
 
 
 @export("mn_snoise2_array")
@@ -754,10 +759,11 @@ def mn_snoise2_array(
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
     for i in range(n):
-        result[i] = simplex2_fbm(
-            x[i], y[i], octaves, persistence, lacunarity,
+        result.unsafe_store(i, simplex2_fbm(
+            x.unsafe_load(i), y.unsafe_load(i),
+            octaves, persistence, lacunarity,
             has_repeatx, repeatx, has_repeaty, repeaty, base, p,
-        )
+        ))
 
 
 @export("mn_snoise3_array")
@@ -771,9 +777,10 @@ def mn_snoise3_array(
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
     for i in range(n):
-        result[i] = simplex3_fbm(
-            x[i], y[i], z[i], octaves, persistence, lacunarity, p,
-        )
+        result.unsafe_store(i, simplex3_fbm(
+            x.unsafe_load(i), y.unsafe_load(i), z.unsafe_load(i),
+            octaves, persistence, lacunarity, p,
+        ))
 
 
 @export("mn_snoise4_array")
@@ -838,8 +845,9 @@ def mn_snoise4_array_gpu(
             ctx.enqueue_copy(p_device, p)
             comptime block_size = 256
             ctx.enqueue_function[simplex4_gpu](
-                x_device, y_device, z_device, w_device, result_device, n,
-                octaves, persistence, lacunarity, p_device,
+                x_device, y_device, z_device, w_device, result_device,
+                Int64(n), Int64(octaves),
+                persistence, lacunarity, p_device,
                 grid_dim=(n + block_size - 1) // block_size,
                 block_dim=block_size,
             )

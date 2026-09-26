@@ -88,26 +88,26 @@ Run these examples with `pixi run python example.py`.
 ## Benchmarks
 
 Measured with `pixi run bench` on an Intel Xeon E5-2697 v4 at 2.30 GHz,
-72 logical CPUs, Linux 6.8.0-136-generic, glibc 2.39. Times are the best of
+72 logical CPUs, Linux 6.8.0-139-generic, glibc 2.39. Times are the best of
 three runs and include the public Python wrapper. Array rows compare one
 `mojo-noise` batch call with the scalar loop required by upstream `noise`
 1.2.2.
 
 | Kernel | mojo-noise | noise 1.2.2 | Speedup |
 |---|---:|---:|---:|
-| pnoise2 262k points, 1 octave | 20.86 ms | 280.54 ms | 13.45x |
-| pnoise2 262k points, 6 octaves | 16.55 ms | 391.63 ms | 23.66x |
-| snoise2 262k points, 1 octave | 18.21 ms | 301.37 ms | 16.55x |
-| snoise3 200k points, 4 octaves | 101.83 ms | 514.67 ms | 5.05x |
-| snoise4 100k points, 3 octaves | 14.41 ms | 179.36 ms | 12.44x |
-| pnoise2 20k scalar Python calls | 78.58 ms | 5.59 ms | 0.07x |
+| pnoise2 262k points, 1 octave | 29.11 ms | 576.20 ms | 19.79x |
+| pnoise2 262k points, 6 octaves | 137.98 ms | 1174.15 ms | 8.51x |
+| snoise2 262k points, 1 octave | 21.96 ms | 564.72 ms | 25.72x |
+| snoise3 200k points, 4 octaves | 96.76 ms | 929.90 ms | 9.61x |
+| snoise4 100k points, 3 octaves | 69.27 ms | 360.68 ms | 5.21x |
+| pnoise2 20k scalar Python calls | 230.07 ms | 19.30 ms | 0.08x |
 
 The optional GPU path is benchmarked at a size large enough to amortize context
 creation and transfers:
 
 | GPU kernel | CPU | GPU | GPU speedup |
 |---|---:|---:|---:|
-| snoise4 1m points, 3 octaves | 85.29 ms | 38.18 ms | 2.23x |
+| snoise4 1m points, 3 octaves | 518.02 ms | 110.59 ms | 4.68x |
 
 The scalar result is intentionally included: upstream's direct CPython C
 extension is much faster for repeated one-point calls. This port is useful
