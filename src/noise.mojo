@@ -2,7 +2,7 @@
 
 from max.algorithm import parallelize
 from max.gpu.host import DeviceContext
-from std.gpu import global_idx
+from max.gpu import global_idx
 from std.math import abs, floor
 from std.sys import simd_width_of
 
@@ -11,6 +11,31 @@ comptime BPtr = Pointer[UInt8, AnyOrigin[mut=True]]
 comptime PARALLEL_THRESHOLD = 16384
 comptime PARALLEL_GRAIN = 4096
 comptime MAX_PARALLEL_WORKERS = 16
+
+
+comptime CFG_OCTAVES = 0
+comptime CFG_PERSISTENCE = 8
+comptime CFG_LACUNARITY = 12
+comptime CFG_HAS0 = 16
+comptime CFG_REPEAT0 = 24
+comptime CFG_HAS1 = 32
+comptime CFG_REPEAT1 = 40
+comptime CFG_REPEAT2 = 44
+comptime CFG_PERM = 56
+comptime CFG_BASEF = 48
+comptime CFG_REPEAT3 = 64
+
+
+def cf(addr: Int, byte_offset: Int) -> Float32:
+    return FPtr(unsafe_from_address=addr + byte_offset).unsafe_load(0)
+
+
+def ci(addr: Int, byte_offset: Int) -> Int:
+    return Int(
+        Pointer[Int64, AnyOrigin[mut=True]](
+            unsafe_from_address=addr + byte_offset
+        ).unsafe_load(0)
+    )
 
 
 def perm(p: BPtr, i: Int) -> Int:
@@ -598,6 +623,53 @@ def simplex4_range(
         ))
 
 
+def perlin1_range(
+    x: FPtr, result: FPtr, start: Int, end: Int, octaves: Int,
+    persistence: Float32, lacunarity: Float32, repeat: Int, base: Int,
+    p: BPtr,
+):
+    for i in range(start, end):
+        result.unsafe_store(i, perlin1_fbm(
+            x.unsafe_load(i), octaves, persistence, lacunarity, repeat, base, p,
+        ))
+
+
+def perlin3_range(
+    x: FPtr, y: FPtr, z: FPtr, result: FPtr, start: Int, end: Int,
+    octaves: Int, persistence: Float32, lacunarity: Float32,
+    repeatx: Int, repeaty: Int, repeatz: Int, base: Int, p: BPtr,
+):
+    for i in range(start, end):
+        result.unsafe_store(i, perlin3_fbm(
+            x.unsafe_load(i), y.unsafe_load(i), z.unsafe_load(i), octaves,
+            persistence, lacunarity, repeatx, repeaty, repeatz, base, p,
+        ))
+
+
+def simplex2_range(
+    x: FPtr, y: FPtr, result: FPtr, start: Int, end: Int, octaves: Int,
+    persistence: Float32, lacunarity: Float32, has_repeatx: Int,
+    repeatx: Float32, has_repeaty: Int, repeaty: Float32, base: Float32,
+    p: BPtr,
+):
+    for i in range(start, end):
+        result.unsafe_store(i, simplex2_fbm(
+            x.unsafe_load(i), y.unsafe_load(i), octaves, persistence,
+            lacunarity, has_repeatx, repeatx, has_repeaty, repeaty, base, p,
+        ))
+
+
+def simplex3_range(
+    x: FPtr, y: FPtr, z: FPtr, result: FPtr, start: Int, end: Int,
+    octaves: Int, persistence: Float32, lacunarity: Float32, p: BPtr,
+):
+    for i in range(start, end):
+        result.unsafe_store(i, simplex3_fbm(
+            x.unsafe_load(i), y.unsafe_load(i), z.unsafe_load(i),
+            octaves, persistence, lacunarity, p,
+        ))
+
+
 def simplex4_gpu(
     x: FPtr, y: FPtr, z: FPtr, w: FPtr, result: FPtr, n: Int64, octaves: Int64,
     persistence: Float32, lacunarity: Float32, p: BPtr,
@@ -645,6 +717,36 @@ def mn_pnoise3(
     )
 
 
+@export("mn_pnoise1_array")
+def mn_pnoise1_array(
+    x_addr: Int, result_addr: Int, n: Int, octaves: Int,
+    persistence: Float32, lacunarity: Float32, repeat: Int, base: Int,
+    perm_addr: Int,
+) abi("C"):
+    var x = FPtr(unsafe_from_address=x_addr)
+    var result = FPtr(unsafe_from_address=result_addr)
+    var p = BPtr(unsafe_from_address=perm_addr)
+    if n < PARALLEL_THRESHOLD:
+        perlin1_range(
+            x, result, 0, n, octaves, persistence, lacunarity, repeat, base, p,
+        )
+        return
+    var num_tasks = (n + PARALLEL_GRAIN - 1) // PARALLEL_GRAIN
+
+    @always_inline
+    def task(task_id: Int) {
+        imm x, imm result, imm n, imm octaves, imm persistence,
+        imm lacunarity, imm repeat, imm base, imm p,
+    }:
+        var start = task_id * PARALLEL_GRAIN
+        perlin1_range(
+            x, result, start, min(start + PARALLEL_GRAIN, n), octaves,
+            persistence, lacunarity, repeat, base, p,
+        )
+
+    parallelize(task, num_tasks, min(num_tasks, MAX_PARALLEL_WORKERS))
+
+
 @export("mn_snoise2")
 def mn_snoise2(
     x: Float32, y: Float32, octaves: Int, persistence: Float32,
@@ -679,21 +781,6 @@ def mn_snoise4(
     )
 
 
-@export("mn_pnoise1_array")
-def mn_pnoise1_array(
-    x_addr: Int, result_addr: Int, n: Int, octaves: Int,
-    persistence: Float32, lacunarity: Float32, repeat: Int, base: Int,
-    perm_addr: Int,
-) abi("C"):
-    var x = FPtr(unsafe_from_address=x_addr)
-    var result = FPtr(unsafe_from_address=result_addr)
-    var p = BPtr(unsafe_from_address=perm_addr)
-    for i in range(n):
-        result.unsafe_store(i, perlin1_fbm(
-            x.unsafe_load(i), octaves, persistence, lacunarity, repeat, base, p,
-        ))
-
-
 @export("mn_pnoise2_array")
 def mn_pnoise2_array(
     x_addr: Int, y_addr: Int, result_addr: Int, n: Int, octaves: Int,
@@ -704,7 +791,7 @@ def mn_pnoise2_array(
     var y = FPtr(unsafe_from_address=y_addr)
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
-    if n < PARALLEL_THRESHOLD or octaves == 1:
+    if n < PARALLEL_THRESHOLD:
         perlin2_range(
             x, y, result, 0, n, octaves, persistence, lacunarity,
             repeatx, repeaty, base, p,
@@ -739,12 +826,26 @@ def mn_pnoise3_array(
     var z = FPtr(unsafe_from_address=z_addr)
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
-    for i in range(n):
-        result.unsafe_store(i, perlin3_fbm(
-            x.unsafe_load(i), y.unsafe_load(i), z.unsafe_load(i),
-            octaves, persistence, lacunarity,
+    if n < PARALLEL_THRESHOLD:
+        perlin3_range(
+            x, y, z, result, 0, n, octaves, persistence, lacunarity,
             repeatx, repeaty, repeatz, base, p,
-        ))
+        )
+        return
+    var num_tasks = (n + PARALLEL_GRAIN - 1) // PARALLEL_GRAIN
+
+    @always_inline
+    def task(task_id: Int) {
+        imm x, imm y, imm z, imm result, imm n, imm octaves, imm persistence,
+        imm lacunarity, imm repeatx, imm repeaty, imm repeatz, imm base, imm p,
+    }:
+        var start = task_id * PARALLEL_GRAIN
+        perlin3_range(
+            x, y, z, result, start, min(start + PARALLEL_GRAIN, n), octaves,
+            persistence, lacunarity, repeatx, repeaty, repeatz, base, p,
+        )
+
+    parallelize(task, num_tasks, min(num_tasks, MAX_PARALLEL_WORKERS))
 
 
 @export("mn_snoise2_array")
@@ -758,12 +859,28 @@ def mn_snoise2_array(
     var y = FPtr(unsafe_from_address=y_addr)
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
-    for i in range(n):
-        result.unsafe_store(i, simplex2_fbm(
-            x.unsafe_load(i), y.unsafe_load(i),
-            octaves, persistence, lacunarity,
+    if n < PARALLEL_THRESHOLD:
+        simplex2_range(
+            x, y, result, 0, n, octaves, persistence, lacunarity,
             has_repeatx, repeatx, has_repeaty, repeaty, base, p,
-        ))
+        )
+        return
+    var num_tasks = (n + PARALLEL_GRAIN - 1) // PARALLEL_GRAIN
+
+    @always_inline
+    def task(task_id: Int) {
+        imm x, imm y, imm result, imm n, imm octaves, imm persistence,
+        imm lacunarity, imm has_repeatx, imm repeatx, imm has_repeaty,
+        imm repeaty, imm base, imm p,
+    }:
+        var start = task_id * PARALLEL_GRAIN
+        simplex2_range(
+            x, y, result, start, min(start + PARALLEL_GRAIN, n), octaves,
+            persistence, lacunarity, has_repeatx, repeatx, has_repeaty,
+            repeaty, base, p,
+        )
+
+    parallelize(task, num_tasks, min(num_tasks, MAX_PARALLEL_WORKERS))
 
 
 @export("mn_snoise3_array")
@@ -776,11 +893,25 @@ def mn_snoise3_array(
     var z = FPtr(unsafe_from_address=z_addr)
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
-    for i in range(n):
-        result.unsafe_store(i, simplex3_fbm(
-            x.unsafe_load(i), y.unsafe_load(i), z.unsafe_load(i),
-            octaves, persistence, lacunarity, p,
-        ))
+    if n < PARALLEL_THRESHOLD:
+        simplex3_range(
+            x, y, z, result, 0, n, octaves, persistence, lacunarity, p,
+        )
+        return
+    var num_tasks = (n + PARALLEL_GRAIN - 1) // PARALLEL_GRAIN
+
+    @always_inline
+    def task(task_id: Int) {
+        imm x, imm y, imm z, imm result, imm n, imm octaves, imm persistence,
+        imm lacunarity, imm p,
+    }:
+        var start = task_id * PARALLEL_GRAIN
+        simplex3_range(
+            x, y, z, result, start, min(start + PARALLEL_GRAIN, n), octaves,
+            persistence, lacunarity, p,
+        )
+
+    parallelize(task, num_tasks, min(num_tasks, MAX_PARALLEL_WORKERS))
 
 
 @export("mn_snoise4_array")
@@ -795,7 +926,7 @@ def mn_snoise4_array(
     var w = FPtr(unsafe_from_address=w_addr)
     var result = FPtr(unsafe_from_address=result_addr)
     var p = BPtr(unsafe_from_address=perm_addr)
-    if n < PARALLEL_THRESHOLD or octaves == 1:
+    if n < PARALLEL_THRESHOLD:
         simplex4_range(
             x, y, z, w, result, 0, n,
             octaves, persistence, lacunarity, p,
@@ -856,3 +987,71 @@ def mn_snoise4_array_gpu(
         return 1
     except:
         return 0
+
+
+@export("mn_pnoise1_cfg")
+def mn_pnoise1_cfg(x: Float32, cfg_addr: Int) abi("C") -> Float32:
+    return perlin1_fbm(
+        x, ci(cfg_addr, CFG_OCTAVES), cf(cfg_addr, CFG_PERSISTENCE),
+        cf(cfg_addr, CFG_LACUNARITY), Int(cf(cfg_addr, CFG_REPEAT0)),
+        Int(cf(cfg_addr, CFG_BASEF)), BPtr(unsafe_from_address=ci(cfg_addr, CFG_PERM)),
+    )
+
+
+@export("mn_pnoise2_cfg")
+def mn_pnoise2_cfg(x: Float32, y: Float32, cfg_addr: Int) abi("C") -> Float32:
+    return perlin2_fbm(
+        x, y, ci(cfg_addr, CFG_OCTAVES), cf(cfg_addr, CFG_PERSISTENCE),
+        cf(cfg_addr, CFG_LACUNARITY), cf(cfg_addr, CFG_REPEAT0),
+        cf(cfg_addr, CFG_REPEAT1), Int(cf(cfg_addr, CFG_BASEF)),
+        BPtr(unsafe_from_address=ci(cfg_addr, CFG_PERM)),
+    )
+
+
+@export("mn_pnoise3_cfg")
+def mn_pnoise3_cfg(
+    x: Float32, y: Float32, z: Float32, cfg_addr: Int,
+) abi("C") -> Float32:
+    return perlin3_fbm(
+        x, y, z, ci(cfg_addr, CFG_OCTAVES), cf(cfg_addr, CFG_PERSISTENCE),
+        cf(cfg_addr, CFG_LACUNARITY), Int(cf(cfg_addr, CFG_REPEAT0)),
+        Int(cf(cfg_addr, CFG_REPEAT1)), Int(cf(cfg_addr, CFG_REPEAT2)),
+        Int(cf(cfg_addr, CFG_BASEF)),
+        BPtr(unsafe_from_address=ci(cfg_addr, CFG_PERM)),
+    )
+
+
+@export("mn_snoise2_cfg")
+def mn_snoise2_cfg(
+    x: Float32, y: Float32, cfg_addr: Int,
+) abi("C") -> Float32:
+    return simplex2_fbm(
+        x, y, ci(cfg_addr, CFG_OCTAVES), cf(cfg_addr, CFG_PERSISTENCE),
+        cf(cfg_addr, CFG_LACUNARITY), ci(cfg_addr, CFG_HAS0),
+        cf(cfg_addr, CFG_REPEAT0), ci(cfg_addr, CFG_HAS1),
+        cf(cfg_addr, CFG_REPEAT1), cf(cfg_addr, CFG_BASEF),
+        BPtr(unsafe_from_address=ci(cfg_addr, CFG_PERM)),
+    )
+
+
+@export("mn_snoise3_cfg")
+def mn_snoise3_cfg(
+    x: Float32, y: Float32, z: Float32, cfg_addr: Int,
+) abi("C") -> Float32:
+    return simplex3_fbm(
+        x, y, z, ci(cfg_addr, CFG_OCTAVES), cf(cfg_addr, CFG_PERSISTENCE),
+        cf(cfg_addr, CFG_LACUNARITY),
+        BPtr(unsafe_from_address=ci(cfg_addr, CFG_PERM)),
+    )
+
+
+@export("mn_snoise4_cfg")
+def mn_snoise4_cfg(
+    x: Float32, y: Float32, z: Float32, w: Float32, cfg_addr: Int,
+) abi("C") -> Float32:
+    return simplex4_fbm(
+        x, y, z, w, ci(cfg_addr, CFG_OCTAVES), cf(cfg_addr, CFG_PERSISTENCE),
+        cf(cfg_addr, CFG_LACUNARITY),
+        BPtr(unsafe_from_address=ci(cfg_addr, CFG_PERM)),
+    )
+

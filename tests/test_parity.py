@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import inspect
 
 import numpy as np
@@ -371,3 +372,104 @@ def test_public_signatures():
     }
     for name, parameters in expected.items():
         assert list(inspect.signature(getattr(ours, name)).parameters) == parameters
+
+
+def test_every_export_has_declared_argtypes():
+    """A missing or wrong-arity entry would only fail mid-benchmark."""
+    from mojo_noise import _lib
+
+    for name in _lib._SIGNATURES:
+        assert getattr(ours.lib(), name).argtypes is not None, name
+    assert set(_lib._SIGNATURES) >= {
+        f"mn_{name}_cfg" for name in
+        ("pnoise1", "pnoise2", "pnoise3", "snoise2", "snoise3", "snoise4")
+    }
+
+
+def test_config_offsets_match_struct_layout():
+    from mojo_noise import _lib
+
+    expected = {
+        "octaves": 0, "persistence": 8, "lacunarity": 12, "has0": 16,
+        "repeat0": 24, "has1": 32, "repeat1": 40, "repeat2": 44,
+        "base": 48, "perm": 56, "repeat3": 64,
+    }
+    for field, offset in expected.items():
+        got = getattr(_lib._Cfg, field).offset
+        assert got == offset, (field, got, offset)
+
+
+def test_config_cache_tracks_parameter_changes():
+    """The cached struct is reused only while the parameters are unchanged."""
+    from mojo_noise import _lib
+
+    a = _lib.config(octaves=1, persistence=0.5, lacunarity=2.0, perm_addr=1)
+    b = _lib.config(octaves=1, persistence=0.5, lacunarity=2.0, perm_addr=1)
+    assert ctypes.cast(a, ctypes.c_void_p).value == ctypes.cast(
+        b, ctypes.c_void_p
+    ).value
+    c = _lib.config(octaves=2, persistence=0.5, lacunarity=2.0, perm_addr=1)
+    assert c.contents.octaves == 2
+    d = _lib.config(octaves=1, persistence=0.5, lacunarity=2.0, perm_addr=1)
+    assert d.contents.octaves == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "coords", "kwargs"),
+    [
+        ("pnoise1", (0.375,), {"octaves": 5, "repeat": 37, "base": 3}),
+        ("pnoise2", (0.375, -1.25), {"octaves": 4, "base": 9}),
+        ("pnoise3", (0.375, -1.25, 2.5), {"octaves": 3, "repeatz": 41}),
+        ("snoise2", (0.375, -1.25), {"octaves": 3, "repeatx": 51, "repeaty": 63}),
+        ("snoise3", (0.375, -1.25, 2.5), {"octaves": 6, "persistence": 0.4}),
+        ("snoise4", (0.375, -1.25, 2.5, 0.75), {"octaves": 4, "lacunarity": 1.7}),
+    ],
+)
+def test_packed_scalar_config_matches_reference(name, coords, kwargs):
+    """The packed struct ABI must agree with upstream for every slot combo."""
+    expected = getattr(reference, name)(*coords, **kwargs)
+    assert getattr(ours, name)(*coords, **kwargs) == pytest.approx(
+        expected, abs=3e-5
+    )
+
+
+def test_repeated_scalar_calls_with_alternating_parameters():
+    """Interleaving configs must not reuse a stale cached struct."""
+    a = (0.31, -0.72)
+    for _ in range(3):
+        assert ours.pnoise2(*a, octaves=2) == pytest.approx(
+            reference.pnoise2(*a, octaves=2), abs=3e-6
+        )
+        assert ours.snoise2(*a, octaves=2, repeatx=32) == pytest.approx(
+            reference.snoise2(*a, octaves=2, repeatx=32), abs=3e-5
+        )
+        assert ours.pnoise1(*a[0], repeat=64, base=7) == pytest.approx(
+            reference.pnoise1(*a[:1], repeat=64, base=7), abs=3e-6
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "dimensions"),
+    [
+        ("pnoise1", 1),
+        ("pnoise2", 2),
+        ("pnoise3", 3),
+        ("snoise2", 2),
+        ("snoise3", 3),
+        ("snoise4", 4),
+    ],
+)
+def test_array_chunk_boundaries_agree_with_serial(name, dimensions):
+    """Every parallel chunk split must give bit-identical results."""
+    rng = np.random.default_rng(700 + dimensions)
+    size = 16384 + 1237
+    coords = [
+        rng.uniform(-4.0, 4.0, size=size).astype(np.float32)
+        for _ in range(dimensions)
+    ]
+    actual = getattr(ours, name)(*coords, octaves=3)
+    for start, stop in ((0, 4096), (4095, 4097), (16383, 16385), (size - 1, size)):
+        expected = getattr(ours, name)(
+            *(coord[start:stop] for coord in coords), octaves=3
+        )
+        np.testing.assert_allclose(actual[start:stop], expected, rtol=0.0, atol=0.0)

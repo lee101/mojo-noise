@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from ._lib import lib
+from ._lib import config as _config, lib
 
 __version__ = "0.1.0"
 
@@ -140,9 +140,16 @@ def pnoise1(
     base = _base(base)
     if _scalar_coords(x):
         return float(
-            lib().mn_pnoise1(
-                float(x), octaves, persistence, lacunarity,
-                repeat, base, _PERM_ADDR,
+            lib().mn_pnoise1_cfg(
+                float(x),
+                _config(
+                    octaves=octaves,
+                    persistence=persistence,
+                    lacunarity=lacunarity,
+                    base=float(base),
+                    repeat0=float(repeat),
+                    perm_addr=_PERM_ADDR,
+                ),
             )
         )
     arrays, shape, scalar = _arrays(x)
@@ -172,19 +179,35 @@ def pnoise2(
         and base == 0
     ):
         if _PNOISE2_DEFAULT is None:
-            _PNOISE2_DEFAULT = lib().mn_pnoise2
-        return _PNOISE2_DEFAULT(
-            x, y, 1, 0.5, 2.0, 1024.0, 1024.0, 0, _PERM_ADDR
-        )
+            _PNOISE2_DEFAULT = (
+                lib().mn_pnoise2_cfg,
+                _config(
+                    octaves=1,
+                    persistence=0.5,
+                    lacunarity=2.0,
+                    repeat0=1024.0,
+                    repeat1=1024.0,
+                    perm_addr=_PERM_ADDR,
+                ),
+            )
+        return _PNOISE2_DEFAULT[0](x, y, _PNOISE2_DEFAULT[1])
     octaves, persistence, lacunarity = _common(octaves, persistence, lacunarity)
     repeatx = _period_float(repeatx, "repeatx")
     repeaty = _period_float(repeaty, "repeaty")
     base = _base(base)
     if _scalar_coords(x, y):
         return float(
-            lib().mn_pnoise2(
-                float(x), float(y), octaves, persistence, lacunarity,
-                repeatx, repeaty, base, _PERM_ADDR,
+            lib().mn_pnoise2_cfg(
+                float(x), float(y),
+                _config(
+                    octaves=octaves,
+                    persistence=persistence,
+                    lacunarity=lacunarity,
+                    base=float(base),
+                    repeat0=repeatx,
+                    repeat1=repeaty,
+                    perm_addr=_PERM_ADDR,
+                ),
             )
         )
     arrays, shape, scalar = _arrays(x, y)
@@ -210,10 +233,18 @@ def pnoise3(
     base = _base(base)
     if _scalar_coords(x, y, z):
         return float(
-            lib().mn_pnoise3(
-                float(x), float(y), float(z), octaves,
-                persistence, lacunarity, repeatx, repeaty, repeatz,
-                base, _PERM_ADDR,
+            lib().mn_pnoise3_cfg(
+                float(x), float(y), float(z),
+                _config(
+                    octaves=octaves,
+                    persistence=persistence,
+                    lacunarity=lacunarity,
+                    base=float(base),
+                    repeat0=float(repeatx),
+                    repeat1=float(repeaty),
+                    repeat2=float(repeatz),
+                    perm_addr=_PERM_ADDR,
+                ),
             )
         )
     arrays, shape, scalar = _arrays(x, y, z)
@@ -244,7 +275,20 @@ def snoise2(
     )
     if _scalar_coords(x, y):
         return float(
-            lib().mn_snoise2(float(x), float(y), *args)
+            lib().mn_snoise2_cfg(
+                float(x), float(y),
+                _config(
+                    octaves=octaves,
+                    persistence=persistence,
+                    lacunarity=lacunarity,
+                    has0=int(has_repeatx),
+                    repeat0=rx,
+                    has1=int(has_repeaty),
+                    repeat1=ry,
+                    base=base,
+                    perm_addr=_PERM_ADDR,
+                ),
+            )
         )
     arrays, shape, scalar = _arrays(x, y)
     result = _result(arrays, shape)
@@ -263,9 +307,14 @@ def snoise3(
     octaves, persistence, lacunarity = _common(octaves, persistence, lacunarity)
     if _scalar_coords(x, y, z):
         return float(
-            lib().mn_snoise3(
-                float(x), float(y), float(z), octaves,
-                persistence, lacunarity, _PERM_ADDR,
+            lib().mn_snoise3_cfg(
+                float(x), float(y), float(z),
+                _config(
+                    octaves=octaves,
+                    persistence=persistence,
+                    lacunarity=lacunarity,
+                    perm_addr=_PERM_ADDR,
+                ),
             )
         )
     arrays, shape, scalar = _arrays(x, y, z)
@@ -287,9 +336,14 @@ def snoise4(
         raise ValueError("device must be 'cpu' or 'gpu'")
     if _scalar_coords(x, y, z, w):
         return float(
-            lib().mn_snoise4(
-                float(x), float(y), float(z), float(w), octaves,
-                persistence, lacunarity, _PERM_ADDR,
+            lib().mn_snoise4_cfg(
+                float(x), float(y), float(z), float(w),
+                _config(
+                    octaves=octaves,
+                    persistence=persistence,
+                    lacunarity=lacunarity,
+                    perm_addr=_PERM_ADDR,
+                ),
             )
         )
     arrays, shape, scalar = _arrays(x, y, z, w)
