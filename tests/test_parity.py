@@ -443,7 +443,7 @@ def test_repeated_scalar_calls_with_alternating_parameters():
         assert ours.snoise2(*a, octaves=2, repeatx=32) == pytest.approx(
             reference.snoise2(*a, octaves=2, repeatx=32), abs=3e-5
         )
-        assert ours.pnoise1(*a[0], repeat=64, base=7) == pytest.approx(
+        assert ours.pnoise1(a[0], repeat=64, base=7) == pytest.approx(
             reference.pnoise1(*a[:1], repeat=64, base=7), abs=3e-6
         )
 
